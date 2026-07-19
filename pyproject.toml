@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "notify"
+version = "0.1.0"
+description = "Shared email/push notification helpers for personal projects"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "mdanifo" }]
+dependencies = []
+
+[project.optional-dependencies]
+# Only needed for the SSM Parameter Store path; env-only callers don't need it.
+ssm = ["boto3>=1.28"]
+dev = ["pytest>=7", "boto3>=1.28"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
