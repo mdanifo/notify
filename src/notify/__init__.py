@@ -16,4 +16,4 @@ from .email import EmailConfig, log_alert, send_email
 
 __all__ = ["EmailConfig", "send_email", "log_alert", "smtp_config"]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -94,3 +94,53 @@ def test_env_wins_over_ssm(monkeypatch):
     fake = _FakeSSM({"/proj/prod/smtp/username": "ssm@x.com"})
     monkeypatch.setattr(config_mod, "_ssm", lambda: fake)
     assert smtp_config(prefix="/proj/prod")["username"] == "env@x.com"
+
+
+# --- shared-credentials prefix ------------------------------------------------
+
+
+def test_credentials_from_shared_recipient_from_project(monkeypatch):
+    # The consolidation shape: creds live once under /shared, each project keeps
+    # its own recipient under its own prefix.
+    fake = _FakeSSM({
+        "/shared/prod/smtp/username": "fleet@x.com",
+        "/shared/prod/smtp/password": "shared-secret",
+        "/proj/prod/alert-email/to": "proj-ops@x.com",
+    })
+    monkeypatch.setattr(config_mod, "_ssm", lambda: fake)
+
+    cfg = smtp_config(prefix="/proj/prod", shared_prefix="/shared/prod")
+    assert cfg["username"] == "fleet@x.com"
+    assert cfg["password"] == "shared-secret"
+    assert cfg["to_address"] == "proj-ops@x.com"       # per-project recipient
+    assert cfg["from_address"] == "fleet@x.com"        # defaults to shared user
+
+
+def test_shared_credentials_win_over_stale_project_copy(monkeypatch):
+    # A leftover per-project credential must NOT shadow the shared one, so
+    # rotating /shared is authoritative even before old copies are deleted.
+    fake = _FakeSSM({
+        "/shared/prod/smtp/username": "fleet@x.com",
+        "/shared/prod/smtp/password": "new-shared-secret",
+        "/proj/prod/smtp/username": "stale@x.com",
+        "/proj/prod/smtp/password": "old-secret",
+        "/proj/prod/alert-email/to": "ops@x.com",
+    })
+    monkeypatch.setattr(config_mod, "_ssm", lambda: fake)
+
+    cfg = smtp_config(prefix="/proj/prod", shared_prefix="/shared/prod")
+    assert cfg["username"] == "fleet@x.com"
+    assert cfg["password"] == "new-shared-secret"
+
+
+def test_shared_prefix_falls_back_to_env(monkeypatch):
+    monkeypatch.setenv("SHARED_PARAMETER_PREFIX", "/shared/prod")
+    fake = _FakeSSM({
+        "/shared/prod/smtp/username": "fleet@x.com",
+        "/shared/prod/smtp/password": "secret",
+        "/shared/prod/alert-email/to": "ops@x.com",  # falls back to shared when project lacks it
+    })
+    monkeypatch.setattr(config_mod, "_ssm", lambda: fake)
+    cfg = smtp_config(prefix="/proj/prod")
+    assert cfg["username"] == "fleet@x.com"
+    assert cfg["to_address"] == "ops@x.com"

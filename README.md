@@ -25,7 +25,8 @@ extra entirely.
 ```python
 from notify import EmailConfig, send_email, log_alert, smtp_config
 
-cfg = smtp_config(prefix="/my-project/prod")   # env vars first, then SSM
+# Per-project prefix for the recipient; shared prefix for the credentials.
+cfg = smtp_config(prefix="/my-project/prod", shared_prefix="/shared/prod")
 if cfg:
     send_email("Subject", "plain body", EmailConfig(**cfg),
                html_body="<p>optional rich body</p>")
@@ -36,8 +37,13 @@ else:
 ## Configuration
 
 Every setting is read from an environment variable first, then from AWS SSM
-Parameter Store under the `prefix` you pass (or the `PARAMETER_PREFIX` env var).
-If no prefix is known, the SSM path is skipped — pure env config needs no AWS.
+Parameter Store. Two prefixes are supported: `prefix` (per-project, or the
+`PARAMETER_PREFIX` env var) and `shared_prefix` (shared credentials, or
+`SHARED_PARAMETER_PREFIX`). **Credentials resolve shared-first** — so rotating
+the Gmail App Password under `/shared/prod` updates every project and a stale
+per-project copy is ignored — while **the recipient resolves project-first**,
+so each project can override where its mail goes. If a prefix is unset its SSM
+lookups are skipped; pure env config needs no AWS.
 
 | Setting | Env var | SSM name (`<prefix>/…`) | Default |
 |---|---|---|---|

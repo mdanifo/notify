@@ -1,13 +1,22 @@
 """Resolve SMTP settings from environment variables and/or AWS SSM.
 
 Each setting is read from an environment variable first (which lets local runs
-and tests work without touching AWS) and from AWS SSM Parameter Store second,
-under a ``prefix`` you supply (e.g. ``/bronco-price-alerter/prod`` or a shared
-``/shared``). The parameter names are stable across all consumers --
-``smtp/username``, ``smtp/password``, ``alert-email/to``, ``alert-email/from``,
-``smtp/host``, ``smtp/port`` -- so one operational runbook applies everywhere.
+and tests work without touching AWS), then from AWS SSM Parameter Store. Two
+prefixes are supported so a fleet of projects can share one set of credentials
+while keeping their own recipient:
 
-The SSM lookup is skipped entirely when no prefix is known, so a purely
+* ``shared_prefix`` -- where the shared SMTP **credentials** live (e.g.
+  ``/shared/prod``). Rotating the Gmail App Password here updates every project.
+* ``prefix`` -- the per-project path (e.g. ``/bronco-price-alerter/prod``),
+  where a project's own ``alert-email/to`` / ``from`` overrides live.
+
+Credentials resolve shared-first (so the shared value is authoritative); the
+recipient resolves project-first (so a project can override where its mail
+goes). The parameter names are stable everywhere -- ``smtp/username``,
+``smtp/password``, ``alert-email/to``, ``alert-email/from``, ``smtp/host``,
+``smtp/port``.
+
+The SSM lookup is skipped for any prefix that is ``None``, so a purely
 env-configured caller never needs AWS credentials or ``boto3`` installed.
 Values are secrets; in AWS they live as ``SecureString`` parameters set
 out-of-band -- nothing here ever writes them.
@@ -17,21 +26,11 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
 _ssm_client = None
-
-
-def _resolve_prefix(prefix: Optional[str]) -> Optional[str]:
-    """Explicit ``prefix`` wins; otherwise ``PARAMETER_PREFIX`` from the env.
-
-    Resolved per call (not frozen at import) so env changes -- including test
-    monkeypatching -- always take effect. Returns ``None`` when no prefix is
-    configured, which turns off the SSM path (env-only mode).
-    """
-    return prefix or os.getenv("PARAMETER_PREFIX")
 
 
 def _ssm():
@@ -48,57 +47,71 @@ def _ssm():
 def _get_setting(
     env_var: str,
     parameter_name: str,
-    *,
-    prefix: Optional[str],
+    prefixes: Sequence[Optional[str]],
     default: Optional[str] = None,
 ) -> Optional[str]:
-    """Resolve one setting: environment variable first, then Parameter Store.
+    """Resolve one setting: environment variable first, then each prefix in
+    order (first hit wins), then ``default``.
 
-    Returns ``default`` if neither source has a value, if no ``prefix`` is set,
-    or if the Parameter Store lookup fails for any reason -- a missing optional
-    setting shouldn't crash the whole run.
+    ``None`` prefixes are skipped, so no-SSM callers need no AWS. A missing
+    optional setting shouldn't crash the run, so a failed lookup falls through
+    to the next prefix / the default rather than raising.
     """
     value = os.getenv(env_var)
     if value:
         return value
 
-    if not prefix:
-        return default
+    for prefix in prefixes:
+        if not prefix:
+            continue
+        try:
+            response = _ssm().get_parameter(
+                Name=f"{prefix}/{parameter_name}", WithDecryption=True
+            )
+            return response["Parameter"]["Value"]
+        except Exception:
+            continue
 
-    try:
-        response = _ssm().get_parameter(
-            Name=f"{prefix}/{parameter_name}", WithDecryption=True
-        )
-        return response["Parameter"]["Value"]
-    except Exception:
-        logger.info(
-            "Parameter not found, using default",
-            extra={"event": "parameter_lookup_miss", "parameter": parameter_name},
-        )
-        return default
+    logger.info(
+        "Parameter not found, using default",
+        extra={"event": "parameter_lookup_miss", "parameter": parameter_name},
+    )
+    return default
 
 
-def smtp_config(prefix: Optional[str] = None) -> Optional[Dict[str, object]]:
+def smtp_config(
+    prefix: Optional[str] = None, shared_prefix: Optional[str] = None
+) -> Optional[Dict[str, object]]:
     """Assemble SMTP settings from env vars / Parameter Store.
 
-    ``prefix`` is the SSM path root (falls back to the ``PARAMETER_PREFIX`` env
-    var). Returns ``None`` when the required values (username, password,
-    recipient) aren't available anywhere, so callers can fall back to
-    :func:`notify.email.log_alert`.
+    ``prefix`` is the per-project SSM path (falls back to the
+    ``PARAMETER_PREFIX`` env var); ``shared_prefix`` is the shared-credentials
+    path (falls back to ``SHARED_PARAMETER_PREFIX``). Credentials resolve
+    shared-first, everything else project-first. Returns ``None`` when the
+    required values (username, password, recipient) aren't available anywhere,
+    so callers can fall back to :func:`notify.email.log_alert`.
     """
-    prefix = _resolve_prefix(prefix)
-    username = _get_setting("SMTP_USERNAME", "smtp/username", prefix=prefix)
-    password = _get_setting("SMTP_PASSWORD", "smtp/password", prefix=prefix)
-    to_address = _get_setting("ALERT_EMAIL_TO", "alert-email/to", prefix=prefix)
+    prefix = prefix or os.getenv("PARAMETER_PREFIX")
+    shared_prefix = shared_prefix or os.getenv("SHARED_PARAMETER_PREFIX")
+
+    # Credentials: the shared value wins, so rotating it is authoritative and a
+    # stale per-project copy is ignored. Recipient/host: project wins, so a
+    # project can override where its mail goes.
+    cred_order = (shared_prefix, prefix)
+    proj_order = (prefix, shared_prefix)
+
+    username = _get_setting("SMTP_USERNAME", "smtp/username", cred_order)
+    password = _get_setting("SMTP_PASSWORD", "smtp/password", cred_order)
+    to_address = _get_setting("ALERT_EMAIL_TO", "alert-email/to", proj_order)
     if not (username and password and to_address):
         return None
 
     from_address = (
-        _get_setting("ALERT_EMAIL_FROM", "alert-email/from", prefix=prefix) or username
+        _get_setting("ALERT_EMAIL_FROM", "alert-email/from", proj_order) or username
     )
     return {
-        "smtp_host": _get_setting("SMTP_HOST", "smtp/host", prefix=prefix, default="smtp.gmail.com"),
-        "smtp_port": int(_get_setting("SMTP_PORT", "smtp/port", prefix=prefix, default="587")),
+        "smtp_host": _get_setting("SMTP_HOST", "smtp/host", proj_order, default="smtp.gmail.com"),
+        "smtp_port": int(_get_setting("SMTP_PORT", "smtp/port", proj_order, default="587")),
         "username": username,
         "password": password,
         "to_address": to_address,
