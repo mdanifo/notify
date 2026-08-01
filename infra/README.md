@@ -1,4 +1,15 @@
-# Shared notification infrastructure
+# Shared account infrastructure
+
+Account-wide CloudFormation stacks that belong to no single project. They live
+here because `notify` was already the home of the first one; nothing in this
+directory is part of the `notify` Python package.
+
+| stack | template | owns |
+|---|---|---|
+| `shared-alarms` | `template.yaml` | the SNS topic every project's alarms fan into |
+| `account-trail` | `account-trail.yaml` | the account-wide CloudTrail |
+
+## shared-alarms
 
 The infrastructure half of the notify consolidation (see notify#6). While the
 `notify` **package** consolidates the notification *code* and the shared Gmail
@@ -57,3 +68,38 @@ Deploy order matters: this `shared-alarms` stack must exist (so
 `/shared/<stage>/alarms-topic-arn` resolves) before a consuming project deploys
 the change. For Terraform consumers (virtual-closet), read the same SSM
 parameter via a `data` source and use its value as the alarm action.
+
+
+## account-trail
+
+One multi-region CloudTrail writing **management events** to a private,
+lifecycle-capped bucket. AWS keeps 90 days of Event history for free, which is
+enough to diagnose something you already know about — it is not enough to
+answer "when did this start" months later, and it cannot be archived or
+searched offline.
+
+Owns:
+
+- `aws-cloudtrail-logs-<account>` — private, SSE-S3, versioned, all four public
+  access blocks on, objects expiring after `RetentionDays` (default 365).
+- the bucket policy CloudTrail writes through, with `aws:SourceArn` conditions
+  as the confused-deputy guard.
+- `account-trail` — multi-region, global service events, **log file validation
+  on** so `aws cloudtrail validate-logs` can prove a file was not altered after
+  delivery.
+
+```bash
+aws cloudformation deploy \
+  --template-file infra/account-trail.yaml \
+  --stack-name account-trail \
+  --tags Project=notify \
+  --region us-east-1 --profile personal
+```
+
+The bucket is `DeletionPolicy: Retain` — an audit log a stack delete can take
+with it is not an audit log.
+
+**Cost:** the first copy of management events is free; storage is a few tens of
+megabytes a year, so this is cents per month. Data events (S3 object-level,
+Lambda invokes) are deliberately **not** enabled — they are the expensive part
+and nothing here needs them.

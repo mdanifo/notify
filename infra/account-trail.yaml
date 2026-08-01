@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Account-wide CloudTrail. One multi-region trail writing management events to a
+  private, lifecycle-capped S3 bucket, so "what happened, and who did it" stays
+  answerable beyond the 90 days of Event history AWS keeps for free. Deployed as
+  its own stack (account-trail) alongside shared-alarms; see infra/README.md.
+
+Parameters:
+  RetentionDays:
+    Type: Number
+    Default: 365
+    MinValue: 7
+    Description: >
+      How long trail objects are kept. Management events are small — a year of
+      this account's activity is a few tens of megabytes — so the default is a
+      year rather than the 90 days Event history already gives for free.
+
+Resources:
+  # Private, encrypted, and never public: the trail records every API call in
+  # the account, which is exactly the thing not to leave readable.
+  TrailBucket:
+    Type: AWS::S3::Bucket
+    # Retain: an audit log that a stack delete can take with it is not an audit
+    # log. Deleting the stack should not destroy the history of what happened.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "aws-cloudtrail-logs-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-trail-objects
+            Status: Enabled
+            ExpirationInDays: !Ref RetentionDays
+            NoncurrentVersionExpirationInDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  TrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TrailBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # The aws:SourceArn conditions are the confused-deputy guard: without
+          # them the CloudTrail service principal could be induced to write
+          # another account's trail into this bucket.
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt TrailBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub "arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/account-trail"
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${TrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceArn: !Sub "arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/account-trail"
+
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    # The bucket policy has to exist before CloudTrail will accept the bucket.
+    DependsOn: TrailBucketPolicy
+    Properties:
+      TrailName: account-trail
+      S3BucketName: !Ref TrailBucket
+      IsLogging: true
+      # Multi-region so an action taken in a region nobody uses is still
+      # recorded — that is precisely where an unnoticed one would happen.
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      # Lets `aws cloudtrail validate-logs` prove a log file was not altered
+      # after delivery. Free, and the whole point of keeping an audit trail.
+      EnableLogFileValidation: true
+
+Outputs:
+  TrailBucketName:
+    Description: S3 bucket holding the CloudTrail management-event logs.
+    Value: !Ref TrailBucket
+  TrailArn:
+    Description: ARN of the account-wide trail.
+    Value: !GetAtt Trail.Arn
