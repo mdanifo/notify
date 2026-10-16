@@ -1,15 +1,11 @@
 """Send notification emails over SMTP (e.g. Gmail with an App Password).
 
-The shared version of the notifier that was copy-pasted across the personal
-alerter projects (bronco/flight price alerters, virtual-closet daily digest):
-an :class:`EmailConfig` + :func:`send_email`, plus :func:`log_alert` as a
-no-credentials fallback used when SMTP isn't configured yet -- in a scheduled
-Lambda/Fargate run that's the difference between "the message silently never
-sent" and "it's visible in the logs even though email delivery isn't wired up
-yet."
+:class:`EmailConfig` plus :func:`send_email`, and :func:`log_alert` as the
+fallback for a scheduled run whose SMTP settings are not in place yet: the
+message shows up in the logs instead of disappearing.
 
-``send_email`` supports an optional HTML alternative so a digest can render as
-a table in a mail client while still degrading to readable plain text.
+``send_email`` takes an optional HTML alternative, so a digest can render as a
+table in a mail client and still read as plain text elsewhere.
 """
 
 from __future__ import annotations
@@ -28,8 +24,8 @@ logger = logging.getLogger(__name__)
 class EmailConfig:
     """Everything :func:`send_email` needs to deliver one message.
 
-    ``from_address`` defaults to ``username`` when omitted -- most senders mail
-    as themselves. Build one from :func:`notify.config.smtp_config` or by hand.
+    ``from_address`` defaults to ``username``. Build one from
+    :func:`notify.config.smtp_config` or by hand.
     """
 
     smtp_host: str
@@ -49,13 +45,11 @@ def send_email(
 ) -> None:
     """Send an email notification.
 
-    ``body`` is the plain-text content; pass ``html_body`` to attach an HTML
-    alternative (the client picks the richest part it can render).
+    ``body`` is the plain-text content; ``html_body`` adds an HTML alternative,
+    and the client picks the richest part it can render.
 
-    Raises whatever smtplib raises on failure (auth error, connection error,
-    etc.) -- callers deliberately don't catch this, so a bad SMTP config
-    surfaces as a job error a monitor can catch, rather than a message that
-    quietly never arrives.
+    Raises whatever smtplib raises (auth error, connection error), so a bad
+    SMTP setup fails the job instead of dropping the message.
     """
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -75,13 +69,11 @@ def send_email(
 
 
 def log_alert(subject: str, body: str) -> None:
-    """Fallback notifier used when no SMTP credentials are configured.
+    """Fallback notifier for when no SMTP credentials are configured.
 
-    Logs at WARNING (not INFO) so it stands out -- a message that only ever
-    gets logged, never emailed, usually means the SMTP parameters haven't been
-    set up yet.
+    Logs at WARNING, so a message that only ever gets logged stands out.
     """
     logger.warning(
-        "Notification not emailed (SMTP not configured) -- logging instead",
+        "Notification not emailed (SMTP not configured); logging instead",
         extra={"event": "email_logged", "subject": subject, "body": body},
     )

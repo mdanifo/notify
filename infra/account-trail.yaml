@@ -11,17 +11,15 @@ Parameters:
     Default: 365
     MinValue: 7
     Description: >
-      How long trail objects are kept. Management events are small — a year of
-      this account's activity is a few tens of megabytes — so the default is a
+      How long trail objects are kept. Management events are small (a year of
+      this account's activity is a few tens of megabytes), so the default is a
       year rather than the 90 days Event history already gives for free.
 
 Resources:
-  # Private, encrypted, and never public: the trail records every API call in
-  # the account, which is exactly the thing not to leave readable.
+  # Private and encrypted: the trail records every API call in the account.
   TrailBucket:
     Type: AWS::S3::Bucket
-    # Retain: an audit log that a stack delete can take with it is not an audit
-    # log. Deleting the stack should not destroy the history of what happened.
+    # Retain: deleting the stack must not delete the audit log.
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -84,12 +82,11 @@ Resources:
       TrailName: account-trail
       S3BucketName: !Ref TrailBucket
       IsLogging: true
-      # Multi-region so an action taken in a region nobody uses is still
-      # recorded — that is precisely where an unnoticed one would happen.
+      # Multi-region, so an action in a region nobody uses is still recorded.
       IsMultiRegionTrail: true
       IncludeGlobalServiceEvents: true
       # Lets `aws cloudtrail validate-logs` prove a log file was not altered
-      # after delivery. Free, and the whole point of keeping an audit trail.
+      # after delivery.
       EnableLogFileValidation: true
 
 Outputs:

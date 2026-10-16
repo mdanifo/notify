@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Shared notification infrastructure for the personal projects (notify#6). Owns
-  the single operational-alarms SNS topic that every project's CloudWatch alarms
-  publish run failures to, instead of a per-project topic + subscription, plus
-  the SSM pointer projects read to find it. Non-secret resources only; the SMTP
-  credentials stay out-of-band SecureStrings. See infra/README.md.
+  Shared notification infrastructure for the personal projects. Owns the single
+  operational-alarms SNS topic that every project's CloudWatch alarms publish
+  run failures to, plus the SSM pointer projects read to find it. Non-secret
+  resources only; the SMTP credentials stay out-of-band SecureStrings. See
+  infra/README.md.
 
 Parameters:
   Stage:
@@ -20,15 +20,14 @@ Parameters:
     AllowedPattern: "^[^@]+@[^@]+\\.[^@]+$"
     ConstraintDescription: Must look like an email address.
     Description: >
-      Where operational alarms from EVERY project are emailed — you, being told
-      that one of the systems broke. One subscription for all projects: after
-      the first deploy, confirm it once from the email SNS sends. Unrelated to
-      any project's ALERT_EMAIL_TO (who receives that project's actual product
-      emails).
+      Where operational alarms from every project are emailed. One subscription
+      for all projects: after the first deploy, confirm it once from the email
+      SNS sends. Unrelated to a project's ALERT_EMAIL_TO, which receives that
+      project's own emails.
 
 Resources:
-  # The one topic every project's alarms fan into. Kept intentionally generic
-  # (not project-specific) so any new project just points its alarms here.
+  # The topic every project's alarms fan into; a new project only has to point
+  # its alarms here.
   AlarmsTopic:
     Type: AWS::SNS::Topic
     Properties:
@@ -42,11 +41,10 @@ Resources:
       Protocol: email
       Endpoint: !Ref OperatorEmail
 
-  # The pointer each project reads to find the shared topic without hardcoding
-  # its ARN: their templates declare an AWS::SSM::Parameter::Value<String>
-  # parameter defaulting to /shared/<Stage>/alarms-topic-arn, which resolves to
-  # this value at deploy time. Kept under the same /shared/<Stage>/ convention
-  # as the shared SMTP credentials.
+  # The pointer each project reads instead of hardcoding the ARN: a template
+  # declares an AWS::SSM::Parameter::Value<String> parameter defaulting to
+  # /shared/<Stage>/alarms-topic-arn, resolved at deploy time. Same
+  # /shared/<Stage>/ convention as the SMTP credentials.
   AlarmsTopicArnParameter:
     Type: AWS::SSM::Parameter
     Properties:
@@ -55,8 +53,8 @@ Resources:
       Value: !Ref AlarmsTopic
       Description: >
         ARN of the shared operational-alarms SNS topic, owned by the
-        shared-alarms CloudFormation stack (notify/infra). Projects read this to
-        route their CloudWatch alarms to the shared topic.
+        shared-alarms CloudFormation stack. Projects read this to route their
+        CloudWatch alarms to the shared topic.
 
 Outputs:
   AlarmsTopicArn:

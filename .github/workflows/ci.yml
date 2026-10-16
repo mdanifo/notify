@@ -1,0 +1,30 @@
+# 3.9 is the requires-python floor; 3.12 is what the consumer images run. The
+# suite fakes smtplib and SSM and needs no network or credentials.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A push to a PR branch supersedes the run already going for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: pytest -q

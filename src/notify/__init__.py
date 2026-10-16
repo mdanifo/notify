@@ -1,4 +1,4 @@
-"""notify -- shared email notification helpers for the personal projects.
+"""notify: email notification helpers shared by the personal projects.
 
     from notify import EmailConfig, send_email, log_alert, smtp_config
 
